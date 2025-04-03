@@ -1,9 +1,12 @@
 import os
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import argparse
 import logging
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 OUTPUT_DIR = os.path.join(os.getcwd(), "pdfs")
 if not os.path.exists(OUTPUT_DIR):
@@ -42,7 +45,29 @@ def export_pdf_urls(urls, output_file="pdf_urls.txt"):
     except Exception as e:
         logging.exception(f"Failed to export PDF URLs: {e}")
 
-def scrape_pdfs(base_url, depth, visited=None, pdf_urls=None):
+def initialize_selenium_driver():
+    logging.info("Initializing Selenium WebDriver.")
+    try:
+        service = Service(ChromeDriverManager().install())
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        driver = webdriver.Chrome(service=service, options=options)
+        return driver
+    except Exception as e:
+        logging.exception("Failed to initialize Selenium WebDriver.")
+        return None
+
+def scrape_with_selenium(driver, url):
+    try:
+        driver.get(url)
+        return driver.page_source
+    except Exception as e:
+        logging.exception(f"Failed to scrape with Selenium: {e}")
+        return None
+
+def scrape_pdfs(base_url, depth, visited=None, pdf_urls=None, use_selenium=False, driver=None):
     if visited is None:
         visited = set()
     if pdf_urls is None:
@@ -54,17 +79,45 @@ def scrape_pdfs(base_url, depth, visited=None, pdf_urls=None):
 
     logging.info(f"Scraping URL: {base_url} (Depth: {depth})")
     try:
-        response = requests.get(base_url)
-        if response.status_code != 200:
-            logging.error(f"Failed to fetch: {base_url} (Status code: {response.status_code})")
-            return pdf_urls
-        soup = BeautifulSoup(response.text, "html.parser")
+        if use_selenium and driver:
+            html_content = scrape_with_selenium(driver, base_url)
+            if not html_content:
+                return pdf_urls
+            soup = BeautifulSoup(html_content, "html.parser")
+        else:
+            response = requests.get(base_url)
+            if response.status_code != 200:
+                logging.error(f"Failed to fetch: {base_url} (Status code: {response.status_code})")
+                return pdf_urls
+            soup = BeautifulSoup(response.text, "html.parser")
+
+        base_netloc = urlparse(base_url).netloc
+        base_domain = ".".join(base_netloc.split(".")[-2:])  # Extract the base domain (e.g., hpseb.in)
         for link in soup.find_all("a", href=True):
-            href = urljoin(base_url, link["href"])
+            href = urljoin(base_url, link["href"])  # Resolve relative links
+            logging.debug(f"Found link: {href}")
+            
+            href_netloc = urlparse(href).netloc
+            href_domain = ".".join(href_netloc.split(".")[-2:])  # Extract the domain of the href
+
+            # Check if the href points to a PDF
             if href.endswith(".pdf"):
                 pdf_urls.append(href)
-            elif href.startswith(base_url) or urljoin(base_url, href).startswith(base_url):  # Only follow links within the same domain
-                scrape_pdfs(href, depth - 1, visited, pdf_urls)
+                continue
+
+            # Check if the link is within the same domain
+            if href_domain != base_domain:
+                logging.info(f"Skipping external link: {href} (Domain: {href_domain})")
+                continue
+
+            # Skip non-HTML links based on file extensions
+            if not href.endswith((".htm", ".html")):
+                logging.info(f"Skipping non-HTML link: {href}")
+                continue
+
+            # Recursively scrape HTML links
+            scrape_pdfs(href, depth - 1, visited, pdf_urls, use_selenium, driver)
+
     except Exception as e:
         logging.exception(f"Error scraping {base_url}: {e}")
     return pdf_urls
@@ -76,23 +129,30 @@ def main():
     parser.add_argument("url", help="The base URL to scrape.")
     parser.add_argument("depth", type=int, help="The depth to scrape.")
     parser.add_argument(
-        "--download", action="store_true", help="Download all found PDF files."
+        "--export", action="store_true", help="Export all found PDF URLs to a text file (skips downloading)."
     )
     parser.add_argument(
-        "--export", action="store_true", help="Export all found PDF URLs to a text file."
+        "--use-selenium", action="store_true", help="Use Selenium for scraping."
     )
     args = parser.parse_args()
 
     logging.info("Starting the web crawler application.")
+    driver = None
     try:
-        pdf_urls = scrape_pdfs(args.url, args.depth)
-        if args.download:
-            for pdf_url in pdf_urls:
-                download_pdf(pdf_url)
+        if args.use_selenium:
+            driver = initialize_selenium_driver()
+        pdf_urls = scrape_pdfs(args.url, args.depth, use_selenium=args.use_selenium, driver=driver)
         if args.export:
             export_pdf_urls(pdf_urls)
+        else:
+            for pdf_url in pdf_urls:
+                download_pdf(pdf_url)
     except Exception as e:
         logging.exception(f"An error occurred during execution: {e}")
+    finally:
+        if driver:
+            driver.quit()
+            logging.info("Selenium WebDriver closed.")
     logging.info("Web crawler application finished execution.")
 
 if __name__ == "__main__":
