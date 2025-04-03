@@ -63,7 +63,7 @@ def scrape_pdfs(base_url, depth, visited=None, pdf_urls=None):
             href = urljoin(base_url, link["href"])
             if href.endswith(".pdf"):
                 pdf_urls.append(href)
-            elif href.startswith(base_url):  # Only follow links within the same domain
+            elif href.startswith(base_url) or urljoin(base_url, href).startswith(base_url):  # Only follow links within the same domain
                 scrape_pdfs(href, depth - 1, visited, pdf_urls)
     except Exception as e:
         logging.exception(f"Error scraping {base_url}: {e}")
