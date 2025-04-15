@@ -7,6 +7,7 @@ import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from time import sleep
 
 OUTPUT_DIR = os.path.join(os.getcwd(), "pdfs")
 if not os.path.exists(OUTPUT_DIR):
@@ -62,6 +63,7 @@ def initialize_selenium_driver():
 def scrape_with_selenium(driver, url):
     try:
         driver.get(url)
+        sleep(5) # TODO: Dynamic content loading
         return driver.page_source
     except Exception as e:
         logging.exception(f"Failed to scrape with Selenium: {e}")
@@ -73,7 +75,7 @@ def scrape_pdfs(base_url, depth, visited=None, pdf_urls=None, use_selenium=False
     if pdf_urls is None:
         pdf_urls = []
     if depth < 0 or base_url in visited:
-        logging.debug(f"Skipping URL: {base_url} (Depth: {depth}, Visited: {base_url in visited})")
+        logging.info(f"Skipping URL: {base_url} (Depth: {depth}, Visited: {base_url in visited})")
         return pdf_urls
     visited.add(base_url)
 
@@ -93,9 +95,14 @@ def scrape_pdfs(base_url, depth, visited=None, pdf_urls=None, use_selenium=False
 
         base_netloc = urlparse(base_url).netloc
         base_domain = ".".join(base_netloc.split(".")[-2:])  # Extract the base domain (e.g., hpseb.in)
-        for link in soup.find_all("a", href=True):
+        links = soup.find_all("a", href=True)
+        logging.info(f"Found {len(links)} links on {base_url}")
+        if len(links) == 0:
+            logging.info(f"No links found on {base_url}. Page content: {soup.prettify()}")
+            
+        for link in links:
             href = urljoin(base_url, link["href"])  # Resolve relative links
-            logging.debug(f"Found link: {href}")
+            logging.info(f"Found link: {href}")
             
             href_netloc = urlparse(href).netloc
             href_domain = ".".join(href_netloc.split(".")[-2:])  # Extract the domain of the href
